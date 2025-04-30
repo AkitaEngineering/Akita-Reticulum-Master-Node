@@ -1,0 +1,81 @@
++=======================================================================
+| Akita Reticulum Master Node (akita-rns package)                       |
++=======================================================================
+
+Thank you for installing the Akita Reticulum integrated deployment package.
+
+Verification Required:
+---------------------
+Before proceeding, please ensure you have verified:
+- User/Group ID: The _reticulum user was assigned UID/GID 902 (placeholder).
+  Confirm this was free in /usr/ports/infrastructure/db/user.list on your
+  system when the port was built.
+- py-serial Path: The port depends on 'comms/py-serial' (placeholder).
+  Confirm this is the correct path on your system using 'pkg_info -Q py-serial'.
+If these differ, the port may need rebuilding with corrections to the Makefile.
+
+Configuration:
+--------------
+1. Create Storage Directory (if needed):
+   Reticulum needs a writable directory for keys/data.
+   # mkdir -p /var/reticulum/storage
+   # chown _reticulum:_reticulum /var/reticulum /var/reticulum/storage
+   # chmod 700 /var/reticulum /var/reticulum/storage
+
+2. Copy and Edit Reticulum Config:
+   # cp /usr/local/share/examples/akita-rns/reticulum-config/config.sample \
+        /etc/reticulum/config
+   Edit /etc/reticulum/config:
+   - Set 'sharing_scope: system' (REQUIRED for status integration).
+   - Set 'storage_path: /var/reticulum/storage' (or your chosen path).
+   - Define your Reticulum interfaces (UDP, Serial, TUN, etc.).
+   Refer to reticulum-config(5) man page and official RNS docs.
+
+Dynamic Firewall Rules (pf):
+----------------------------
+This package uses a helper script to automatically generate basic pf(4)
+rules based on the interfaces enabled in /etc/reticulum/config.
+
+Setup Required (ONCE):
+1. Create the pf anchor directory (if needed):
+   # mkdir -p /etc/pf.anchors
+
+2. Add the following lines ONCE to your main /etc/pf.conf file:
+
+   # Anchor for Reticulum rules managed by rc.d script
+   anchor "akita-rnsd"
+   load anchor "akita-rnsd" from "/etc/pf.anchors/akita-rnsd"
+
+3. Reload your pf rules:
+   # pfctl -f /etc/pf.conf
+
+The service script will manage rules in /etc/pf.anchors/akita-rnsd.
+Review generated rules and the helper script
+(/usr/local/libexec/akita-rns/generate_pf_rules.py). This feature
+requires the 'databases/py-yaml' package (installed as a dependency).
+
+Service Management (rc.d):
+-------------------------
+1. Copy the rc.d script:
+   # cp /usr/local/share/examples/akita-rns/rc.d/akita-rnsd /etc/rc.d/akita-rnsd
+   # chmod +x /etc/rc.d/akita-rnsd
+
+2. Enable and start the service:
+   Add the following to /etc/rc.conf.local:
+     akita_rnsd_flags="-c /etc/reticulum/config" # Or adjust config path/flags
+     pkg_scripts="akita-rnsd" # Add to list of services to start on boot
+   Then run:
+   # rcctl enable akita-rnsd
+   # rcctl start akita-rnsd
+
+Check Status:
+------------
+# rcctl status akita-rnsd
+# rnsstatus
+
+Logs are typically in /var/log/daemon (tagged 'akita-rnsd').
+
+Documentation:
+-------------
+Man pages: akita(7), rnsd(8), reticulum-config(5)
+Official RNS Docs: https://reticulum.network/manual/
