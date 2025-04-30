@@ -1,0 +1,34 @@
+@comment $OpenBSD$
+# Core RNS Binaries
+bin/rnsd
+bin/rnsstatus
+bin/rnpath
+bin/rnx
+bin/rnid # Placeholder - verify if installed
+bin/rncp # Placeholder - verify if installed
+# Akita Helper Script
+libexec/akita-rns/generate_pf_rules.py
+# Man Pages
+man/man5/reticulum-config.5
+man/man7/akita.7
+man/man8/rnsd.8
+# Python RNS Library Files (representative)
+${PYSITELIB}/RNS/__init__.py
+# ... Many RNS library files ...
+${PYSITELIB}/RNS/(...files...).py
+# Python Dependency Files (representative)
+${PYSITELIB}/yaml/__init__.py
+# ... py-yaml files ...
+${PYSITELIB}/cryptography/__init__.py
+# ... py-cryptography files ...
+${PYSITELIB}/serial/__init__.py
+# ... py-serial files ...
+# Distribution Info
+${PYSITELIB}/reticulum-*.dist-info/METADATA
+# ... other dist-info files for rns, yaml, cryptography, serial ...
+# Examples and Service Script
+@pkgdir share/examples/akita-rns
+@sample share/examples/akita-rns/reticulum-config/config.sample
+@pkgdir share/examples/akita-rns/rc.d
+share/examples/akita-rns/rc.d/akita-rnsd
+@comment TODO: Finalize this PLIST with 'make plist' on OpenBSD
