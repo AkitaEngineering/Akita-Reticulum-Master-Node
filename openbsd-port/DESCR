@@ -1,0 +1,9 @@
+Reticulum is a modern, cryptography-based network stack designed for
+resilience and independence from centralized infrastructure. It can
+operate over various bearers like radio, LoRa, packet radio, serial
+links, or IP networks (UDP/TCP).
+
+This package provides an integrated deployment ("Akita Node") for OpenBSD,
+including the core Reticulum daemon (rnsd), command-line utilities, an rc.d
+service script with dynamic PF anchor integration, and documentation.
+Maintained by Akita Engineering.
