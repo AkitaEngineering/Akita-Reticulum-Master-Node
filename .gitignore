@@ -1,0 +1,21 @@
+# OpenBSD port build files
+work/
+distinfo.tmp
+*.tgz
+*.pkg
+
+# Python cache/build files
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Local config files (if any)
+# .local_config
+
+# OS generated files
+.DS_Store
+Thumbs.db
