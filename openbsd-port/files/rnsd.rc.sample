@@ -1,0 +1,222 @@
+#!/bin/sh
+#
+# $OpenBSD: rnsd.rc.sample,v 1.3 2025/04/27 ... $ # Use CVS style version
+# rc.d script for the Reticulum Network Stack daemon (rnsd)
+# Packaged as akita-rnsd for the Akita Reticulum Master Node project
+
+# --- Configuration ---
+# These paths are substituted by the Makefile during installation
+daemon="/usr/local/bin/rnsd"
+rnsstatus_cmd="/usr/local/bin/rnsstatus"
+pf_rule_generator="/usr/local/libexec/akita-rns/generate_pf_rules.py"
+# Python path is substituted by Makefile sed command below:
+_python_cmd="/usr/local/bin/python${MODPY_VERSION}"
+
+# Default configuration file path (can be overridden by akita_rnsd_config in rc.conf)
+_akita_rnsd_config_default="/etc/reticulum/config"
+
+# Default user to run as (created by the port, can be overridden by akita_rnsd_user)
+_akita_rnsd_user_default="_reticulum" # VERIFY UID/GID 902 in ports tree!
+
+# Default daemon flags (can be added to via akita_rnsd_flags)
+_akita_rnsd_daemon_flags_default=""
+
+# Syslog facility and priority for daemon logs
+_akita_rnsd_syslog_facility="daemon.info"
+# Syslog tag is substituted by Makefile sed command below:
+_akita_rnsd_syslog_tag="akita-rnsd"
+
+# Name of the pf anchor used by this service (substituted by Makefile sed)
+_pf_anchor_name="akita-rnsd"
+_pf_anchor_file="/etc/pf.anchors/${_pf_anchor_name}"
+
+# --- rc.subr Integration ---
+. /etc/rc.d/rc.subr
+
+# --- Service Variables ---
+rc_reload=YES # Enable reload command to re-read config and update pf rules
+rc_bg=YES     # Let rc.d handle backgrounding
+
+# --- Private Variables ---
+# Use service-specific variable names from rc.conf(8) if defined
+_akita_rnsd_config=${akita_rnsd_config:-${_akita_rnsd_config_default}}
+_akita_rnsd_user=${akita_rnsd_user:-${_akita_rnsd_user_default}}
+# Combine default flags with flags from rc.conf.local
+_akita_rnsd_flags="${_akita_rnsd_daemon_flags_default} ${akita_rnsd_flags}"
+# Final command executed by su/daemon_exec
+_daemon_exec="${daemon} ${_akita_rnsd_flags} -c ${_akita_rnsd_config}"
+
+
+# --- Service Functions ---
+
+# rc_pre: Checks before starting/reloading
+rc_pre() {
+	if [ ! -f "${_akita_rnsd_config}" ]; then
+		echo "Error: Configuration file ${_akita_rnsd_config} not found."
+		return 1
+	fi
+	# Note: rnsd does not appear to have a dedicated config validation flag.
+	# Configuration errors will likely cause rnsd to fail on startup.
+	# The 'checkconfig' action provides basic dependency checks.
+	return 0
+}
+
+# rc_post: Actions after stopping
+rc_post() {
+	echo "Flushing rules from pf anchor '${_pf_anchor_name}'."
+	pfctl -a "${_pf_anchor_name}" -F rules >/dev/null 2>&1 || true # Ignore errors if anchor doesn't exist
+}
+
+# rc_check: Check process status (called by default rc_status)
+rc_check() {
+	# Check if the process is running as the correct user with the config file path in args
+	pgrep -U "${_akita_rnsd_user}" -f "${daemon}.*${_akita_rnsd_config}" > /dev/null
+}
+
+# rc_status: Enhance default status output
+rc_status() {
+	if rc_check; then
+		local _pid=$(pgrep -U "${_akita_rnsd_user}" -f "${daemon}.*${_akita_rnsd_config}")
+		echo "${name} is running as pid ${_pid}."
+		# Attempt to get detailed status using rnsstatus
+		echo "--- Reticulum Status ---"
+		if [ ! -x "${rnsstatus_cmd}" ]; then
+			 echo " Status check skipped: ${rnsstatus_cmd} not found or not executable."
+		elif ! ${_python_cmd} -c "import yaml" >/dev/null 2>&1; then
+			 echo " Status check dependencies missing: Cannot import PyYAML for helpers."
+		else
+			 # IMPORTANT: Requires 'sharing_scope: system' in Reticulum config
+			 # Run rnsstatus as the daemon user (_reticulum by default). Use su without -l.
+			 if su "${_akita_rnsd_user}" -c "${rnsstatus_cmd}"; then
+				 : # Status command succeeded, output already printed
+			 else
+				 echo " Warning: Failed to execute '${rnsstatus_cmd}' as user '${_akita_rnsd_user}'."
+				 echo " Ensure 'sharing_scope: system' is set in ${_akita_rnsd_config},"
+				 echo " the daemon is fully initialized, and user ${_akita_rnsd_user} has permissions for IPC."
+			 fi
+		fi
+		echo "------------------------"
+	else
+		echo "${name} is not running."
+	fi
+}
+
+# Function to generate and load PF rules using the Python helper
+generate_pf_rules() {
+	if [ ! -x "${pf_rule_generator}" ]; then
+		echo "Error: PF rule generator script not found or not executable: ${pf_rule_generator}"
+		return 1
+	fi
+	 if ! ${_python_cmd} -c "import yaml" >/dev/null 2>&1; then
+		echo "Error: Cannot generate PF rules: PyYAML dependency not met for ${_python_cmd}."
+		return 1
+	fi
+
+	echo "Generating PF rules for anchor '${_pf_anchor_name}'..."
+	# Run generator, capture output, check exit status
+	# Use temporary file for robustness in case generation fails mid-stream
+	local _tmp_pf_rules=$(mktemp "/tmp/${name}_pf.XXXXXX")
+	if ${_python_cmd} "${pf_rule_generator}" "${_akita_rnsd_config}" > "${_tmp_pf_rules}"; then
+		# Use pfctl's -a anchor -f file syntax which handles replacement atomically
+		echo "Loading rules into pf anchor '${_pf_anchor_name}'..."
+		pfctl -a "${_pf_anchor_name}" -f "${_tmp_pf_rules}"
+		if [ $? -ne 0 ]; then
+			echo "Warning: Failed to load rules into pf anchor '${_pf_anchor_name}'. Check pf syntax in ${_tmp_pf_rules}."
+			rm -f "${_tmp_pf_rules}"
+			# Continue startup but warn user
+			return 0 # Or return 1 to fail? Defaulting to continue with warning.
+		fi
+		rm -f "${_tmp_pf_rules}" # Clean up temp file on success
+		return 0
+	else
+		local _ret=$?
+		echo "Error: Failed to generate PF rules from ${_akita_rnsd_config}. Python script exited with status ${_ret}."
+		# Check stderr from the python script (might be in syslog via logger if start fails later)
+		cat "${_tmp_pf_rules}" >&2 # Show potentially partial/error output
+		rm -f "${_tmp_pf_rules}"
+		# Optionally prevent startup on rule generation failure: return 1
+		return 1 # Fail service start if rules can't be generated
+	fi
+}
+
+# rc_cmd: Main command dispatcher
+rc_cmd() {
+	local cmd=$1
+	shift
+
+	case $cmd in
+	start)
+		rc_check && echo "${name} is already running." && return 0
+		echo "Starting ${name}."
+		rc_pre || return 1
+		# Generate and load PF rules *before* starting the daemon
+		generate_pf_rules || return 1 # Stop if rules fail
+		# Start daemon, redirecting output to logger via pipe
+		# Use daemon_exec variable derived from rc.subr for consistency if needed,
+		# but direct su call allows easier stdout/stderr piping to logger.
+		su "${_akita_rnsd_user}" -c "cd / && exec ${_daemon_exec}" | \
+			logger -t "${_akita_rnsd_syslog_tag}" -p "${_akita_rnsd_syslog_facility}" &
+		;;
+
+	stop)
+		echo "Stopping ${name}."
+		# Use pkill to find and terminate the correct process
+		pkill -${sig_stop:-TERM} -U "${_akita_rnsd_user}" -f "${daemon}.*${_akita_rnsd_config}"
+		rc_post # Flush pf rules after stopping
+		;;
+
+	checkconfig)
+		echo "Checking configuration file ${_akita_rnsd_config} and dependencies..."
+		rc_pre || return 1 # Checks config file existence
+		# Check helper script existence and python dependency
+		if [ ! -x "${pf_rule_generator}" ]; then
+			 echo "Error: PF rule generator script not found or not executable: ${pf_rule_generator}"
+			 return 1
+		fi
+		if ! ${_python_cmd} -c "import yaml" >/dev/null 2>&1; then
+			echo "Error: PyYAML dependency not met for ${_python_cmd}."
+			return 1
+		fi
+		echo "Dependencies look OK. Check syslog for runtime errors after starting ${name}."
+		return 0
+		;;
+
+	status)
+		rc_status
+		;;
+
+	reload)
+		# Reload config: Regenerate and reload pf rules, then send SIGHUP if supported
+		echo "Reloading ${name} configuration and pf rules..."
+		rc_pre || return 1
+		generate_pf_rules || { echo "Error: Failed to generate/load new pf rules during reload. Service not reloaded."; return 1; }
+		# Send SIGHUP if rnsd supports it for config reload (currently assumed NO in rc_reload var)
+		if [ "${rc_reload}" = "YES" ]; then
+			# Check if rnsd actually supports SIGHUP for reload before sending
+			# For now, assume it might, but warn user if rc_reload wasn't explicitly enabled
+			# A better check would involve rnsd documentation or testing.
+			echo "Sending SIGHUP to ${name} (if supported by rnsd)..."
+			pkill -HUP -U "${_akita_rnsd_user}" -f "${daemon}.*${_akita_rnsd_config}" || echo "Info: No running process found to send SIGHUP."
+		else
+			echo "Info: rnsd reload via SIGHUP not configured/supported; only PF rules reloaded."
+			echo "Restart service ('rcctl restart ${name}') for full config reload."
+		fi
+		;;
+
+	*)
+		# Use standard rc.subr usage function if available, otherwise basic message
+		if typeset -f rc_usage >/dev/null; then
+			rc_usage
+		else
+			echo "Usage: $0 {start|stop|reload|restart|status|checkconfig}"
+			return 1
+		fi
+		;;
+	esac
+}
+
+# --- Main Execution ---
+# rc_cmd is called by rc.subr automatically unless overridden like above
+# If rc_cmd is fully custom, call it directly:
+rc_cmd $1
+
