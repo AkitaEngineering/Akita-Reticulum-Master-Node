@@ -4,7 +4,7 @@
 
 This project provides the necessary components (OpenBSD port, rc.d service script, helper utilities, documentation) to install, configure, and manage the Reticulum Network Stack daemon (`rnsd`) as a first-class service on OpenBSD. It aims to create a reliable, secure, and manageable system suitable for acting as a core component in a Reticulum network – the "Akita Node."
 
-**Current Status:** Beta (Untested - Requires Verification & Testing)
+**Current Status:** Beta
 
 ---
 
