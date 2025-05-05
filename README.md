@@ -177,7 +177,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 
-Licensed under the terms of the **ISC license**. See the [`LICENSE`](LICENSE) file.
+Licensed under the terms of the **BSD-2**. See the [`LICENSE`](LICENSE) file.
 
 ## Disclaimer
 
