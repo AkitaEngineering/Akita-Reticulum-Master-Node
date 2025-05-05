@@ -6,6 +6,8 @@ This project provides the necessary components (OpenBSD port, rc.d service scrip
 
 **Current Status:** Beta
 
+![Akita Reticulum Master Node](https://akitaengineering.com/wp-content/uploads/2025/05/AkitaReticulumMasterNode.png)
+
 ---
 
 ## Table of Contents
