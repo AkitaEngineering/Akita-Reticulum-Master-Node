@@ -6,7 +6,6 @@ This project provides the necessary components (OpenBSD port, rc.d service scrip
 
 **Current Status:** Beta
 
-![Akita Reticulum Master Node](https://akitaengineering.com/wp-content/uploads/2025/05/AkitaReticulumMasterNode.png)
 
 ---
 
@@ -85,57 +84,74 @@ Once packages are built and available on mirrors:
 pkg_add akita-rns
 ```
 
-Configuration
+## Configuration
+
 After installation, follow these steps:
 
-1. Reticulum Configuration
+### 1. Reticulum Configuration
 Create Storage Directory (if needed):
 ```
 mkdir -p /var/reticulum/storage # Or your configured storage_path parent
 chown _reticulum:_reticulum /var/reticulum /var/reticulum/storage
 chmod 700 /var/reticulum /var/reticulum/storage
 ```
-Copy Sample Config:
-```
+#### Copy Sample Config:
+```bash
 cp /usr/local/share/examples/akita-rns/reticulum-config/config.sample \
    /etc/reticulum/config
 ```
-#### Edit Configuration: Modify /etc/reticulum/config according to your needs.
 
-- Set sharing_scope: system (REQUIRED for status integration).
+#### Edit Configuration:
+Modify `/etc/reticulum/config` according to your needs:
 
-- Set storage_path: /var/reticulum/storage (or match created dir).
-
-- Define your desired Reticulum interfaces (UDP, Serial, TUN, etc.).
-
-- Refer to the reticulum-config(5) man page and the Official Reticulum Documentation.
+- Set `sharing_scope: system` (REQUIRED for status integration)
+- Set `storage_path: /var/reticulum/storage` (or match created directory)
+- Define your desired Reticulum interfaces (UDP, Serial, TUN, etc.)
+- Refer to the `reticulum-config(5)` man page and the [Official Reticulum Documentation](https://reticulum.network/manual/)
 
 ### 2. Firewall (pf) Anchor Setup
+
+The service automatically generates PF rules based on your Reticulum configuration. These rules are loaded into a dedicated PF anchor.
+
 #### Create Anchor Directory (if needed):
-
+```bash
 mkdir -p /etc/pf.anchors
+```
 
-Edit /etc/pf.conf: Add the following lines once:
+#### Edit /etc/pf.conf:
+Add the following lines **once** to your main `/etc/pf.conf` file:
 
+```
 # Anchor for Reticulum rules managed by rc.d script
 anchor "akita-rnsd"
 load anchor "akita-rnsd" from "/etc/pf.anchors/akita-rnsd"
-
-Reload pf:
 ```
+
+#### Reload pf:
+```bash
 pfctl -f /etc/pf.conf
 ```
+
+**Note:** The service script automatically generates and loads PF rules when starting. Rules are based on enabled interfaces in your Reticulum configuration. You can disable PF rule generation for specific interfaces by setting `pf_managed: false` in the interface configuration. Review generated rules in `/etc/pf.anchors/akita-rnsd` and adjust as needed for your security requirements.
 ### 3. Service Configuration
-Copy rc.d Script:
-```
+
+#### Copy rc.d Script:
+```bash
 cp /usr/local/share/examples/akita-rns/rc.d/akita-rnsd /etc/rc.d/akita-rnsd
 chmod +x /etc/rc.d/akita-rnsd
 ```
-Edit /etc/rc.conf.local: Add the following lines to enable and configure the service:
+
+#### Edit /etc/rc.conf.local:
+Add the following lines to enable and configure the service:
+
 ```
-akita_rnsd_flags="-c /etc/reticulum/config" # Or other rnsd flags
-pkg_scripts="akita-rnsd" # Add service name to list of pkg scripts to start
+akita_rnsd_flags="-c /etc/reticulum/config"  # Or other rnsd flags
+pkg_scripts="akita-rnsd"  # Add service name to list of pkg scripts to start
 ```
+
+**Optional configuration variables:**
+- `akita_rnsd_user`: Override the default `_reticulum` user (not recommended)
+- `akita_rnsd_config`: Override the default config path `/etc/reticulum/config`
 ## Usage
 
 Manage the `rnsd` service using `rcctl(8)`:
@@ -144,25 +160,40 @@ Manage the `rnsd` service using `rcctl(8)`:
 - **Enable service:** `rcctl enable akita-rnsd`
 - **Start service:** `rcctl start akita-rnsd`
 - **Stop service:** `rcctl stop akita-rnsd`
-- **Check status:** `rcctl status akita-rnsd`
-- **Reload service:** `rcctl reload akita-rnsd`
+- **Check status:** `rcctl status akita-rnsd` (includes detailed `rnsstatus` output)
+- **Reload service:** `rcctl reload akita-rnsd` (regenerates PF rules and sends SIGHUP if supported)
 - **Disable service:** `rcctl disable akita-rnsd`
-- **Check config basics:** `rcctl check akita-rnsd`
+- **Check config basics:** `rcctl check akita-rnsd` (validates config file and dependencies)
 
-Logs are typically stored in `/var/log/daemon` and tagged with `akita-rnsd`.
+### Logging
+Logs are automatically redirected to `syslog(3)` and typically stored in `/var/log/daemon` with the tag `akita-rnsd`. The service script includes startup error checking and will warn if the daemon fails to start.
+
+### Troubleshooting
+If the service fails to start:
+1. Check `/var/log/daemon` for error messages tagged `akita-rnsd`
+2. Verify the configuration file exists and is valid YAML: `rcctl check akita-rnsd`
+3. Ensure the `_reticulum` user has proper permissions for the storage directory
+4. Verify PF rules were generated correctly: `pfctl -a akita-rnsd -s rules`
+5. Check that `sharing_scope: system` is set in `/etc/reticulum/config` for status integration
 
 ## Important Verification Notes
 
 ### User/Group ID
-The port attempts to use UID/GID `902` (placeholder). **VERIFY** this ID is free in `/usr/ports/infrastructure/db/user.list`. Modify the `Makefile` if needed before building.
+The port attempts to use UID/GID `902` (placeholder). **VERIFY** this ID is free in `/usr/ports/infrastructure/db/user.list` before building. Modify the `Makefile` if a different UID/GID is needed.
 
-### `py-serial` Dependency
-The port assumes `comms/py-serial`. **VERIFY** using `pkg_info -Q py-serial`. Modify the `Makefile` if needed.
+### Dependencies
+The port depends on:
+- `security/py-cryptography` - Cryptographic operations
+- `comms/py-serial` - Serial interface support
+- `databases/py-yaml` - Configuration parsing and PF rule generation
+
+**VERIFY** the `comms/py-serial` path is correct for your system using `pkg_info -Q py-serial`. Modify the `Makefile` if needed.
 
 ### PLIST Generation
-For a correct package:
-1. Run `make generate-plist` in the port directory.
-2. Ensure `make makesum` is executed before `make install`.
+For a correct package listing:
+1. Run `make makesum` to download and verify the source archive checksum
+2. Run `make generate-plist` in the port directory to generate an accurate PLIST
+3. Review the generated PLIST before final installation
 
 ## Documentation
 

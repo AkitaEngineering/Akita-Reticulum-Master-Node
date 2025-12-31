@@ -35,7 +35,7 @@ _pf_anchor_file="/etc/pf.anchors/${_pf_anchor_name}"
 
 # --- Service Variables ---
 rc_reload=YES # Enable reload command to re-read config and update pf rules
-rc_bg=YES     # Let rc.d handle backgrounding
+# Note: We handle backgrounding manually to support user switching and logger piping
 
 # --- Private Variables ---
 # Use service-specific variable names from rc.conf(8) if defined
@@ -51,10 +51,28 @@ _daemon_exec="${daemon} ${_akita_rnsd_flags} -c ${_akita_rnsd_config}"
 
 # rc_pre: Checks before starting/reloading
 rc_pre() {
+	# Check configuration file exists and is readable
 	if [ ! -f "${_akita_rnsd_config}" ]; then
 		echo "Error: Configuration file ${_akita_rnsd_config} not found."
 		return 1
 	fi
+	if [ ! -r "${_akita_rnsd_config}" ]; then
+		echo "Error: Configuration file ${_akita_rnsd_config} is not readable."
+		return 1
+	fi
+	
+	# Verify the daemon user exists
+	if ! id -u "${_akita_rnsd_user}" >/dev/null 2>&1; then
+		echo "Error: User ${_akita_rnsd_user} does not exist."
+		return 1
+	fi
+	
+	# Verify daemon binary exists and is executable
+	if [ ! -x "${daemon}" ]; then
+		echo "Error: Daemon binary ${daemon} not found or not executable."
+		return 1
+	fi
+	
 	# Note: rnsd does not appear to have a dedicated config validation flag.
 	# Configuration errors will likely cause rnsd to fail on startup.
 	# The 'checkconfig' action provides basic dependency checks.
@@ -107,7 +125,7 @@ generate_pf_rules() {
 		echo "Error: PF rule generator script not found or not executable: ${pf_rule_generator}"
 		return 1
 	fi
-	 if ! ${_python_cmd} -c "import yaml" >/dev/null 2>&1; then
+	if ! ${_python_cmd} -c "import yaml" >/dev/null 2>&1; then
 		echo "Error: Cannot generate PF rules: PyYAML dependency not met for ${_python_cmd}."
 		return 1
 	fi
@@ -115,27 +133,47 @@ generate_pf_rules() {
 	echo "Generating PF rules for anchor '${_pf_anchor_name}'..."
 	# Run generator, capture output, check exit status
 	# Use temporary file for robustness in case generation fails mid-stream
-	local _tmp_pf_rules=$(mktemp "/tmp/${name}_pf.XXXXXX")
-	if ${_python_cmd} "${pf_rule_generator}" "${_akita_rnsd_config}" > "${_tmp_pf_rules}"; then
+	# Use TMPDIR if available, fallback to /tmp
+	local _tmpdir="${TMPDIR:-/tmp}"
+	local _tmp_pf_rules=$(mktemp "${_tmpdir}/${name}_pf.XXXXXX" 2>/dev/null)
+	if [ -z "${_tmp_pf_rules}" ]; then
+		echo "Error: Failed to create temporary file for PF rules."
+		return 1
+	fi
+	# Cleanup function for temp file
+	_cleanup_tmp() {
+		rm -f "${_tmp_pf_rules}"
+	}
+	
+	if ${_python_cmd} "${pf_rule_generator}" "${_akita_rnsd_config}" > "${_tmp_pf_rules}" 2>&1; then
+		# Validate that rules file is not empty and has content
+		if [ ! -s "${_tmp_pf_rules}" ]; then
+			echo "Warning: Generated PF rules file is empty."
+		fi
 		# Use pfctl's -a anchor -f file syntax which handles replacement atomically
 		echo "Loading rules into pf anchor '${_pf_anchor_name}'..."
-		pfctl -a "${_pf_anchor_name}" -f "${_tmp_pf_rules}"
-		if [ $? -ne 0 ]; then
-			echo "Warning: Failed to load rules into pf anchor '${_pf_anchor_name}'. Check pf syntax in ${_tmp_pf_rules}."
-			rm -f "${_tmp_pf_rules}"
-			# Continue startup but warn user
-			return 0 # Or return 1 to fail? Defaulting to continue with warning.
+		if pfctl -a "${_pf_anchor_name}" -f "${_tmp_pf_rules}" 2>&1; then
+			_cleanup_tmp
+			return 0
+		else
+			echo "Error: Failed to load rules into pf anchor '${_pf_anchor_name}'. Check pf syntax."
+			echo "Generated rules (for debugging):"
+			cat "${_tmp_pf_rules}" >&2
+			_cleanup_tmp
+			# Fail startup if PF rules cannot be loaded (security critical)
+			return 1
 		fi
-		rm -f "${_tmp_pf_rules}" # Clean up temp file on success
-		return 0
 	else
 		local _ret=$?
 		echo "Error: Failed to generate PF rules from ${_akita_rnsd_config}. Python script exited with status ${_ret}."
-		# Check stderr from the python script (might be in syslog via logger if start fails later)
-		cat "${_tmp_pf_rules}" >&2 # Show potentially partial/error output
-		rm -f "${_tmp_pf_rules}"
-		# Optionally prevent startup on rule generation failure: return 1
-		return 1 # Fail service start if rules can't be generated
+		# Show error output from the python script
+		if [ -s "${_tmp_pf_rules}" ]; then
+			echo "Error output:"
+			cat "${_tmp_pf_rules}" >&2
+		fi
+		_cleanup_tmp
+		# Fail service start if rules can't be generated
+		return 1
 	fi
 }
 
@@ -152,22 +190,66 @@ rc_cmd() {
 		# Generate and load PF rules *before* starting the daemon
 		generate_pf_rules || return 1 # Stop if rules fail
 		# Start daemon, redirecting output to logger via pipe
-		# Use daemon_exec variable derived from rc.subr for consistency if needed,
-		# but direct su call allows easier stdout/stderr piping to logger.
-		su "${_akita_rnsd_user}" -c "cd / && exec ${_daemon_exec}" | \
-			logger -t "${_akita_rnsd_syslog_tag}" -p "${_akita_rnsd_syslog_facility}" &
+		# Background the entire pipeline properly using a subshell
+		(su "${_akita_rnsd_user}" -c "cd / && exec ${_daemon_exec}" 2>&1 | \
+			logger -t "${_akita_rnsd_syslog_tag}" -p "${_akita_rnsd_syslog_facility}") &
+		local _daemon_pid=$!
+		
+		# Wait for daemon to start with timeout (max 5 seconds, check every 0.5s)
+		local _waited=0
+		local _max_wait=5
+		while [ ${_waited} -lt ${_max_wait} ]; do
+			if rc_check; then
+				echo "${name} started successfully."
+				return 0
+			fi
+			# Check if background process is still running
+			if ! kill -0 ${_daemon_pid} 2>/dev/null; then
+				echo "Error: ${name} process exited immediately. Check logs for details."
+				return 1
+			fi
+			sleep 0.5
+			_waited=$((_waited + 1))
+		done
+		
+		# If we get here, daemon didn't start in time
+		if ! rc_check; then
+			echo "Warning: ${name} may have failed to start (timeout after ${_max_wait}s). Check logs."
+			# Don't kill the process - it might still be starting
+			return 1
+		fi
 		;;
 
 	stop)
+		if ! rc_check; then
+			echo "${name} is not running."
+			return 0
+		fi
 		echo "Stopping ${name}."
 		# Use pkill to find and terminate the correct process
+		# Wait up to 10 seconds for graceful shutdown
 		pkill -${sig_stop:-TERM} -U "${_akita_rnsd_user}" -f "${daemon}.*${_akita_rnsd_config}"
+		local _waited=0
+		local _max_wait=10
+		while [ ${_waited} -lt ${_max_wait} ]; do
+			if ! rc_check; then
+				break
+			fi
+			sleep 1
+			_waited=$((_waited + 1))
+		done
+		# Force kill if still running
+		if rc_check; then
+			echo "Warning: ${name} did not stop gracefully, sending SIGKILL."
+			pkill -KILL -U "${_akita_rnsd_user}" -f "${daemon}.*${_akita_rnsd_config}"
+		fi
 		rc_post # Flush pf rules after stopping
 		;;
 
 	checkconfig)
 		echo "Checking configuration file ${_akita_rnsd_config} and dependencies..."
-		rc_pre || return 1 # Checks config file existence
+		rc_pre || return 1 # Checks config file existence, user, daemon binary
+		
 		# Check helper script existence and python dependency
 		if [ ! -x "${pf_rule_generator}" ]; then
 			 echo "Error: PF rule generator script not found or not executable: ${pf_rule_generator}"
@@ -177,6 +259,19 @@ rc_cmd() {
 			echo "Error: PyYAML dependency not met for ${_python_cmd}."
 			return 1
 		fi
+		
+		# Check if storage directory exists and is writable (if configured)
+		# Try to extract storage_path from config (basic check)
+		if command -v grep >/dev/null 2>&1; then
+			local _storage_path=$(grep -E "^\s*storage_path\s*:" "${_akita_rnsd_config}" 2>/dev/null | sed 's/.*:\s*\(.*\)/\1/' | tr -d '"'"'"' | tr -d ' ')
+			if [ -n "${_storage_path}" ] && [ -d "${_storage_path}" ]; then
+				if [ ! -w "${_storage_path}" ]; then
+					echo "Warning: Storage directory ${_storage_path} exists but is not writable by current user."
+					echo "         Ensure ${_akita_rnsd_user} has write permissions."
+				fi
+			fi
+		fi
+		
 		echo "Dependencies look OK. Check syslog for runtime errors after starting ${name}."
 		return 0
 		;;
@@ -187,16 +282,29 @@ rc_cmd() {
 
 	reload)
 		# Reload config: Regenerate and reload pf rules, then send SIGHUP if supported
+		if ! rc_check; then
+			echo "Error: ${name} is not running. Use 'start' instead of 'reload'."
+			return 1
+		fi
 		echo "Reloading ${name} configuration and pf rules..."
 		rc_pre || return 1
-		generate_pf_rules || { echo "Error: Failed to generate/load new pf rules during reload. Service not reloaded."; return 1; }
-		# Send SIGHUP if rnsd supports it for config reload (currently assumed NO in rc_reload var)
+		generate_pf_rules || { 
+			echo "Error: Failed to generate/load new pf rules during reload. Service not reloaded."
+			return 1
+		}
+		# Send SIGHUP if rnsd supports it for config reload
 		if [ "${rc_reload}" = "YES" ]; then
-			# Check if rnsd actually supports SIGHUP for reload before sending
-			# For now, assume it might, but warn user if rc_reload wasn't explicitly enabled
-			# A better check would involve rnsd documentation or testing.
-			echo "Sending SIGHUP to ${name} (if supported by rnsd)..."
-			pkill -HUP -U "${_akita_rnsd_user}" -f "${daemon}.*${_akita_rnsd_config}" || echo "Info: No running process found to send SIGHUP."
+			# Check if process exists before sending signal
+			if rc_check; then
+				echo "Sending SIGHUP to ${name} (if supported by rnsd)..."
+				if pkill -HUP -U "${_akita_rnsd_user}" -f "${daemon}.*${_akita_rnsd_config}" 2>/dev/null; then
+					echo "SIGHUP sent successfully."
+				else
+					echo "Warning: Failed to send SIGHUP. Process may have exited."
+				fi
+			else
+				echo "Warning: ${name} is not running. Cannot send SIGHUP."
+			fi
 		else
 			echo "Info: rnsd reload via SIGHUP not configured/supported; only PF rules reloaded."
 			echo "Restart service ('rcctl restart ${name}') for full config reload."

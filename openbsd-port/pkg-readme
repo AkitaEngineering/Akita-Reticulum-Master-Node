@@ -34,7 +34,8 @@ Configuration:
 Dynamic Firewall Rules (pf):
 ----------------------------
 This package uses a helper script to automatically generate basic pf(4)
-rules based on the interfaces enabled in /etc/reticulum/config.
+rules based on the interfaces enabled in /etc/reticulum/config. Rules
+are generated and loaded automatically when the service starts.
 
 Setup Required (ONCE):
 1. Create the pf anchor directory (if needed):
@@ -49,10 +50,17 @@ Setup Required (ONCE):
 3. Reload your pf rules:
    # pfctl -f /etc/pf.conf
 
-The service script will manage rules in /etc/pf.anchors/akita-rnsd.
-Review generated rules and the helper script
-(/usr/local/libexec/akita-rns/generate_pf_rules.py). This feature
-requires the 'databases/py-yaml' package (installed as a dependency).
+The service script automatically generates and manages rules in
+/etc/pf.anchors/akita-rnsd when starting or reloading. You can disable
+PF rule generation for specific interfaces by setting 'pf_managed: false'
+in the interface configuration. Review generated rules and adjust as
+needed for your security requirements.
+
+The helper script is located at:
+/usr/local/libexec/akita-rns/generate_pf_rules.py
+
+This feature requires the 'databases/py-yaml' package (installed as a
+dependency).
 
 Service Management (rc.d):
 -------------------------
@@ -62,18 +70,36 @@ Service Management (rc.d):
 
 2. Enable and start the service:
    Add the following to /etc/rc.conf.local:
-     akita_rnsd_flags="-c /etc/reticulum/config" # Or adjust config path/flags
-     pkg_scripts="akita-rnsd" # Add to list of services to start on boot
+     akita_rnsd_flags="-c /etc/reticulum/config"  # Or adjust config path/flags
+     pkg_scripts="akita-rnsd"  # Add to list of services to start on boot
+   
+   Optional variables:
+     akita_rnsd_user="_reticulum"  # Override default user (not recommended)
+     akita_rnsd_config="/etc/reticulum/config"  # Override default config path
+   
    Then run:
    # rcctl enable akita-rnsd
    # rcctl start akita-rnsd
+   
+   The service will automatically generate PF rules before starting.
 
 Check Status:
 ------------
-# rcctl status akita-rnsd
-# rnsstatus
+# rcctl status akita-rnsd    # Shows process status and detailed rnsstatus output
+# rnsstatus                   # Direct status check (requires sharing_scope: system)
 
-Logs are typically in /var/log/daemon (tagged 'akita-rnsd').
+Logs are automatically redirected to syslog and typically in /var/log/daemon
+(tagged 'akita-rnsd'). The service includes startup error checking and will
+warn if the daemon fails to start.
+
+Troubleshooting:
+---------------
+If the service fails to start:
+1. Check /var/log/daemon for error messages
+2. Run 'rcctl check akita-rnsd' to validate configuration
+3. Verify _reticulum user permissions for storage directory
+4. Check PF rules: 'pfctl -a akita-rnsd -s rules'
+5. Ensure 'sharing_scope: system' is set in /etc/reticulum/config
 
 Documentation:
 -------------

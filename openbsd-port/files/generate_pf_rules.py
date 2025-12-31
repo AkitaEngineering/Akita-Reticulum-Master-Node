@@ -6,14 +6,10 @@
 
 import sys
 import yaml
-import ipaddress
 import os
-import socket # For hostname resolution
 
 # Default Reticulum port (used by AutoInterface, UDPInterface if not specified)
 DEFAULT_RNS_UDP_PORT = 4242
-# Default base directory for finding interfaces if not absolute
-DEFAULT_IF_BASE = "/sys/class/net/" # Linux specific, might not be relevant for OpenBSD pf rules directly
 
 def is_valid_port(port_val):
     """ Check if a value is a valid TCP/UDP port """
@@ -23,19 +19,24 @@ def is_valid_port(port_val):
     except (ValueError, TypeError):
         return False
 
-def resolve_host(hostname):
-    """ Try to resolve hostname to an IP address (returns first IPv4 found) """
-    try:
-        # Get first IPv4 address
-        addr_info = socket.getaddrinfo(hostname, None, socket.AF_INET)
-        return addr_info[0][4][0] if addr_info else None
-    except socket.gaierror:
-        return None # Could not resolve
-
 def generate_rules(config_path):
     """Parses the Reticulum config and prints PF rules to stdout."""
+    # Validate config path is absolute and exists
+    if not os.path.isabs(config_path):
+        print(f"# Error: Config path must be absolute: {config_path}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Check file exists and is readable
+    if not os.path.isfile(config_path):
+        print(f"# Error: Config file not found: {config_path}", file=sys.stderr)
+        sys.exit(1)
+    
+    if not os.access(config_path, os.R_OK):
+        print(f"# Error: Config file is not readable: {config_path}", file=sys.stderr)
+        sys.exit(1)
+    
     try:
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f) # Use safe_load
     except FileNotFoundError:
         print(f"# Error: Config file not found: {config_path}", file=sys.stderr)
@@ -122,6 +123,10 @@ def generate_rules(config_path):
                         continue
                     # Rule for listening TCP socket
                     bind_ip = iface_config.get('bind_ip', 'any') # Default listen on all IPs
+                    # Validate bind_ip to prevent injection (basic check)
+                    if bind_ip != 'any' and not bind_ip.replace('.', '').replace(':', '').replace('/', '').isalnum():
+                        print(f"# Warning: Skipping {iface_type} ({iface_name}) - invalid bind_ip format: {bind_ip}", file=sys.stderr)
+                        continue
                     to_spec = f"to {bind_ip}" if bind_ip != 'any' else "to any"
                     print(f"pass in quick proto tcp from any {to_spec} port {listen_port} keep state # {iface_type} listen ({iface_name}) port {listen_port}")
                     # Outgoing replies handled by stateful rule above
@@ -137,6 +142,11 @@ def generate_rules(config_path):
             # --- TUNInterface ---
             elif iface_type == 'TUNInterface':
                 if iface_dev:
+                    # Validate device name to prevent injection
+                    # Device names should be alphanumeric with possible numbers
+                    if not iface_dev.replace('_', '').replace('-', '').isalnum():
+                        print(f"# Warning: Skipping TUNInterface ({iface_name}) - invalid device name: {iface_dev}", file=sys.stderr)
+                        continue
                     # Basic rule: allow all traffic IN and OUT on the TUN interface.
                     # Assumes filtering happens elsewhere or isn't needed here.
                     print(f"pass quick on {iface_dev} # {iface_type} ({iface_name}) device {iface_dev}")

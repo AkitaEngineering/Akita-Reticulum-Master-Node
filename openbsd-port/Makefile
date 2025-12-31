@@ -4,6 +4,7 @@ COMMENT =   Reticulum network stack daemon and utilities (Akita Node)
 
 # --- Basic Port Info ---
 V =             0.9.4
+PKGREVISION =   0
 DISTNAME =      reticulum-${V}
 PKGNAME =       akita-rns-${V} # Using akita-rns as package name prefix
 CATEGORIES =    net comms security
@@ -64,13 +65,9 @@ post-install:
 	${INSTALL_DATA_DIR} ${EXAMPLE_DIR}/reticulum-config
 	${INSTALL_DATA} ${WRKSRC}/packaging/openbsd/config.sample \
 		${EXAMPLE_DIR}/reticulum-config/config.sample
-	# Install rc.d script (substituting paths and names)
+	# Install rc.d script (substituting MODPY_VERSION placeholder)
 	${INSTALL_DATA_DIR} ${EXAMPLE_DIR}/rc.d
-	sed -e 's,${PREFIX},/usr/local,g' \
-		-e 's,\$${MODPY_VERSION},${MODPY_VERSION},g' \
-		-e 's,libexec/akita/,libexec/akita-rns/,g' \
-		-e 's,/etc/pf.anchors/rnsd,/etc/pf.anchors/akita-rnsd,g' \
-		-e 's,logger -t rnsd,logger -t akita-rnsd,g' \
+	sed -e 's,\$${MODPY_VERSION},${MODPY_VERSION},g' \
 		${FILESDIR}/rnsd.rc.sample > ${WRKDIR}/akita-rnsd.rc
 	# Use correct name for installed script example
 	${INSTALL_SCRIPT} ${WRKDIR}/akita-rnsd.rc ${EXAMPLE_DIR}/rc.d/akita-rnsd
