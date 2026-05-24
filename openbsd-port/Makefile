@@ -31,7 +31,7 @@ MODULES =       lang/python
 MODPY_RUN_DEPENDS = \
 	security/py-cryptography \
 	comms/py-serial \
-	databases/py-yaml # Added for pf rule generator script
+	textproc/py-yaml # Added for pf rule generator script
 
 # --- Dedicated User/Group ---
 # Creates user _reticulum:_reticulum for running rnsd
@@ -58,6 +58,7 @@ MAN=            ${FILESDIR}/rnsd.8.sc \
 # Install examples, helper script, man pages in post-install stage
 INSTALL_DATA_DIR += ${EXAMPLE_DIR}/reticulum-config \
 			${EXAMPLE_DIR}/rc.d \
+			${EXAMPLE_DIR}/syslog \
 			${HELPER_DIR}
 
 post-install:
@@ -65,15 +66,23 @@ post-install:
 	${INSTALL_DATA_DIR} ${EXAMPLE_DIR}/reticulum-config
 	${INSTALL_DATA} ${WRKSRC}/packaging/openbsd/config.sample \
 		${EXAMPLE_DIR}/reticulum-config/config.sample
-	# Install rc.d script (substituting MODPY_VERSION placeholder)
+	# Install rc.d scripts (substituting MODPY_VERSION placeholder)
 	${INSTALL_DATA_DIR} ${EXAMPLE_DIR}/rc.d
 	sed -e 's,\$${MODPY_VERSION},${MODPY_VERSION},g' \
 		${FILESDIR}/rnsd.rc.sample > ${WRKDIR}/akita-rnsd.rc
-	# Use correct name for installed script example
 	${INSTALL_SCRIPT} ${WRKDIR}/akita-rnsd.rc ${EXAMPLE_DIR}/rc.d/akita-rnsd
-	# Install Python helper script for pf rules
+	sed -e 's,\$${MODPY_VERSION},${MODPY_VERSION},g' \
+		${FILESDIR}/akita_rnsd_web.rc.sample > ${WRKDIR}/akita_rnsd_web.rc
+	${INSTALL_SCRIPT} ${WRKDIR}/akita_rnsd_web.rc ${EXAMPLE_DIR}/rc.d/akita_rnsd_web
+	# Install Python helper scripts
 	${INSTALL_DATA_DIR} ${HELPER_DIR}
 	${INSTALL_SCRIPT} ${FILESDIR}/generate_pf_rules.py ${HELPER_DIR}/
+	${INSTALL_SCRIPT} ${FILESDIR}/validate_config.py ${HELPER_DIR}/
+	${INSTALL_SCRIPT} ${FILESDIR}/akita_web_status.py ${HELPER_DIR}/
+	# Install syslog and newsyslog configurations
+	${INSTALL_DATA_DIR} ${EXAMPLE_DIR}/syslog
+	${INSTALL_DATA} ${FILESDIR}/akita-rnsd.syslog.conf ${EXAMPLE_DIR}/syslog/
+	${INSTALL_DATA} ${FILESDIR}/akita-rnsd.newsyslog.conf ${EXAMPLE_DIR}/syslog/
 	# Install man pages
 	${INSTALL_MAN_DIR} ${PREFIX}/man/man5 ${PREFIX}/man/man7 ${PREFIX}/man/man8
 	${INSTALL_MAN} ${FILESDIR}/rnsd.8.sc ${PREFIX}/man/man8/rnsd.8

@@ -83,19 +83,43 @@ Service Management (rc.d):
    
    The service will automatically generate PF rules before starting.
 
+Logs are now automatically managed by standard OpenBSD logging.
+
 Check Status:
 ------------
-# rcctl status akita-rnsd    # Shows process status and detailed rnsstatus output
-# rnsstatus                   # Direct status check (requires sharing_scope: system)
+# rcctl status akita-rnsd    # Shows process status and detailed rnstatus output
+# rnstatus                   # Direct status check (requires sharing_scope: system)
 
-Logs are automatically redirected to syslog and typically in /var/log/daemon
-(tagged 'akita-rnsd'). The service includes startup error checking and will
-warn if the daemon fails to start.
+Logging and Log Rotation:
+-------------------------
+The akita-rnsd daemon utilizes native OpenBSD daemon logging facilities. 
+To route these logs to a dedicated file and configure automatic rotation:
+
+1. Configure syslog:
+   # cp /usr/local/share/examples/akita-rns/syslog/akita-rnsd.syslog.conf /etc/syslog.conf.d/
+   # rcctl reload syslogd
+
+2. Configure log rotation (newsyslog):
+   # cp /usr/local/share/examples/akita-rns/syslog/akita-rnsd.newsyslog.conf /etc/newsyslog.conf.d/
+
+Web Status Dashboard:
+---------------------
+A lightweight, sandboxed (pledge) web dashboard is included to provide easy remote visibility into node health via a browser.
+
+1. Enable and start the web dashboard:
+   # cp /usr/local/share/examples/akita-rns/rc.d/akita_rnsd_web /etc/rc.d/akita_rnsd_web
+   # chmod +x /etc/rc.d/akita_rnsd_web
+   # rcctl enable akita_rnsd_web
+   # rcctl start akita_rnsd_web
+
+2. Access the dashboard:
+   Open a browser to http://127.0.0.1:8080/ 
+   (It is recommended to place this behind httpd(8) or an SSH tunnel for remote access).
 
 Troubleshooting:
 ---------------
 If the service fails to start:
-1. Check /var/log/daemon for error messages
+1. Check /var/log/akita-rnsd.log (or /var/log/daemon) for error messages
 2. Run 'rcctl check akita-rnsd' to validate configuration
 3. Verify _reticulum user permissions for storage directory
 4. Check PF rules: 'pfctl -a akita-rnsd -s rules'

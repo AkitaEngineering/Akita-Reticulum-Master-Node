@@ -15,6 +15,12 @@ DEFAULT_RNS_UDP_PORT = 4242
 
 logger = logging.getLogger(__name__)
 
+
+def sanitize_comment(val):
+    if val is None:
+        return ""
+    return str(val).replace('\n', ' ').replace('\r', ' ')
+
 def configure_logging(debug=False):
     """Configure module logger to write to stderr."""
     if logger.handlers:
@@ -98,27 +104,34 @@ def generate_rules(config_path, debug=False):
             logger.info(f"Skipping PF rule generation for interface (pf_managed: false): {iface_config.get('name', 'unnamed')}")
             continue
 
-        iface_type = iface_config.get('type')
-        iface_name = iface_config.get('name', 'unnamed')
-        iface_dev = iface_config.get('device') # Used by UDP, TUN
+        iface_type = sanitize_comment(iface_config.get('type')) if iface_config.get('type') else None
+        iface_name = sanitize_comment(iface_config.get('name', 'unnamed'))
+        iface_dev = sanitize_comment(iface_config.get('device')) if iface_config.get('device') else None
 
         try:
-            # --- AutoInterface / UDPInterface ---
-            if iface_type == 'AutoInterface' or iface_type == 'UDPInterface':
+            # --- AutoInterface ---
+            if iface_type == 'AutoInterface':
+                rule_comment = f"# {iface_type} ({iface_name}) discovery ports"
+                # AutoInterface requires 29716 and 42671 for discovery/traffic.
+                print(f"pass in quick proto udp from any to any port {{ 29716, 42671 }} {rule_comment}")
+                print(f"pass out quick proto udp from any port {{ 29716, 42671 }} to any {rule_comment}")
+                rules_generated = True
+                logger.debug(f"Generated UDP rules for {iface_type} ({iface_name}) on discovery ports")
+
+            # --- UDPInterface ---
+            elif iface_type == 'UDPInterface':
                 udp_port = iface_config.get('port', DEFAULT_RNS_UDP_PORT)
                 if not is_valid_port(udp_port):
                     logger.warning(f"Skipping {iface_type} ({iface_name}) - invalid port: {udp_port}")
                     continue
 
-                target_host = iface_config.get('target_host')
+                target_host = sanitize_comment(iface_config.get('target_host')) if iface_config.get('target_host') else None
                 target_port = iface_config.get('target_port', udp_port)
-                group = iface_config.get('group')
+                group = sanitize_comment(iface_config.get('group')) if iface_config.get('group') else None
 
                 # Basic rule allows broadcast/multicast/unicast listen on the port
                 # Specifying 'on device' might be too restrictive if device isn't always known/used by pf
                 # Let pf match based on destination IP/port primarily.
-                # if_spec = f"on {iface_dev} " if iface_dev else "" # Consider if this adds value or complexity
-                if_spec = ""
                 rule_comment = f"# {iface_type} ({iface_name}) port {udp_port}"
                 if target_host:
                      rule_comment += f" -> {target_host}:{target_port}"
@@ -126,17 +139,17 @@ def generate_rules(config_path, debug=False):
                      rule_comment += f" group {group}"
 
                 # Allow incoming packets to the listen port
-                print(f"pass in quick {if_spec}proto udp from any to any port {udp_port} {rule_comment}")
+                print(f"pass in quick proto udp from any to any port {udp_port} {rule_comment}")
                 # Allow outgoing packets originating from the listen port (replies/broadcasts)
                 # Using 'keep state' might be better for replies if pf is stateful.
-                print(f"pass out quick {if_spec}proto udp from any port {udp_port} to any {rule_comment}")
+                print(f"pass out quick proto udp from any port {udp_port} to any {rule_comment}")
                 rules_generated = True
                 logger.debug(f"Generated UDP rules for {iface_type} ({iface_name}) on port {udp_port}")
 
             # --- TCPInterface ---
             elif iface_type == 'TCPInterface':
                 listen_port = iface_config.get('listen_port')
-                target_host = iface_config.get('target_host')
+                target_host = sanitize_comment(iface_config.get('target_host')) if iface_config.get('target_host') else None
                 target_port = iface_config.get('target_port')
 
                 if listen_port:
@@ -144,9 +157,9 @@ def generate_rules(config_path, debug=False):
                         logger.warning(f"Skipping {iface_type} ({iface_name}) - invalid listen_port: {listen_port}")
                         continue
                     # Rule for listening TCP socket
-                    bind_ip = iface_config.get('bind_ip', 'any') # Default listen on all IPs
+                    bind_ip = sanitize_comment(iface_config.get('bind_ip', 'any')) # Default listen on all IPs
                     # Validate bind_ip to prevent injection (basic check)
-                    if bind_ip != 'any' and not bind_ip.replace('.', '').replace(':', '').replace('/', '').isalnum():
+                    if bind_ip != 'any' and not bind_ip.replace('.', '').replace(':', '').replace('/', '').replace('%', '').isalnum():
                         logger.warning(f"Skipping {iface_type} ({iface_name}) - invalid bind_ip format: {bind_ip}")
                         continue
                     to_spec = f"to {bind_ip}" if bind_ip != 'any' else "to any"

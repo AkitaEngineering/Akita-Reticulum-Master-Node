@@ -41,9 +41,11 @@ This allows organizations and individuals to deploy professional, purpose-driven
 
 * **Easy Installation:** Packaged as a standard OpenBSD port (`net/akita-rns`).
 * **Standard Service Management:** Includes an `rc.d` script (`/etc/rc.d/akita-rnsd`) for easy service control via `rcctl(8)`.
+* **Pre-Flight Validation:** Automatically validates your Reticulum YAML config and ensures necessary settings (like `sharing_scope: system`) are present before starting.
 * **Dynamic Firewall Integration:** Automatically generates and loads basic `pf(4)` rules into a dedicated anchor (`akita-rnsd`) based on the enabled interfaces in the Reticulum configuration.
 * **Centralized Configuration:** Uses standard OpenBSD locations (`/etc/reticulum/config`).
-* **Enhanced Diagnostics:** Improved `rcctl status akita-rnsd` output including `rnsstatus` info; logs daemon output to `syslog(3)`.
+* **Enhanced Diagnostics & Web UI:** Improved `rcctl status akita-rnsd` output including `rnstatus` info. Includes an optional, sandboxed (via `pledge(2)`) Web Status Dashboard on port `8080`.
+* **Dedicated Logging & Rotation:** Integrates natively with OpenBSD `syslogd(8)` and includes drop-in configs for dedicated logging and `newsyslog(8)` rotation.
 * **Dedicated User:** Runs `rnsd` as an unprivileged user (`_reticulum`) created by the port.
 * **Leverages Reticulum:** Builds upon RNS's core strengths: end-to-end encryption, mesh capabilities, multi-transport operation.
 * **Leverages OpenBSD:** Benefits from OpenBSD's security track record, robust networking stack, and powerful `pf(4)` firewall.
@@ -135,10 +137,19 @@ pfctl -f /etc/pf.conf
 **Note:** The service script automatically generates and loads PF rules when starting. Rules are based on enabled interfaces in your Reticulum configuration. You can disable PF rule generation for specific interfaces by setting `pf_managed: false` in the interface configuration. Review generated rules in `/etc/pf.anchors/akita-rnsd` and adjust as needed for your security requirements.
 ### 3. Service Configuration
 
-#### Copy rc.d Script:
+#### Copy rc.d Scripts:
 ```bash
 cp /usr/local/share/examples/akita-rns/rc.d/akita-rnsd /etc/rc.d/akita-rnsd
-chmod +x /etc/rc.d/akita-rnsd
+cp /usr/local/share/examples/akita-rns/rc.d/akita_rnsd_web /etc/rc.d/akita_rnsd_web
+chmod +x /etc/rc.d/akita-rnsd /etc/rc.d/akita_rnsd_web
+```
+
+#### 4. Logging & Log Rotation:
+The daemon natively logs to OpenBSD's syslog. To isolate these logs and enable rotation:
+```bash
+cp /usr/local/share/examples/akita-rns/syslog/akita-rnsd.syslog.conf /etc/syslog.conf.d/
+cp /usr/local/share/examples/akita-rns/syslog/akita-rnsd.newsyslog.conf /etc/newsyslog.conf.d/
+rcctl reload syslogd
 ```
 
 #### Edit /etc/rc.conf.local:
@@ -160,13 +171,21 @@ Manage the `rnsd` service using `rcctl(8)`:
 - **Enable service:** `rcctl enable akita-rnsd`
 - **Start service:** `rcctl start akita-rnsd`
 - **Stop service:** `rcctl stop akita-rnsd`
-- **Check status:** `rcctl status akita-rnsd` (includes detailed `rnsstatus` output)
+- **Check status:** `rcctl status akita-rnsd` (includes detailed `rnstatus` output)
 - **Reload service:** `rcctl reload akita-rnsd` (regenerates PF rules and sends SIGHUP if supported)
 - **Disable service:** `rcctl disable akita-rnsd`
 - **Check config basics:** `rcctl check akita-rnsd` (validates config file and dependencies)
 
+### Web Dashboard
+You can enable the optional web dashboard to view node status remotely:
+```bash
+rcctl enable akita_rnsd_web
+rcctl start akita_rnsd_web
+```
+Access it via `http://127.0.0.1:8080/`.
+
 ### Logging
-Logs are automatically redirected to `syslog(3)` and typically stored in `/var/log/daemon` with the tag `akita-rnsd`. The service script includes startup error checking and will warn if the daemon fails to start.
+Logs are automatically redirected to `syslog(3)` and are stored in `/var/log/akita-rnsd.log` (if you configured the syslog snippet) or `/var/log/daemon` by default. The service script includes startup config validation and will warn if the daemon is misconfigured.
 
 ### Troubleshooting
 If the service fails to start:
